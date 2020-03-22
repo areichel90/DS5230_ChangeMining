@@ -13,7 +13,7 @@ library(lubridate)
 
 
 ```{r include=FALSE}
-df <- read_csv("data\\online_retail_II.csv") %>%
+df <- read_excel("..\\data\\online_retail_II.xlsx") %>%
   rename(InvoiceNo = Invoice, UnitPrice = Price, CustomerID = `Customer ID`) %>%
   mutate(isRefund = grepl("C", InvoiceNo) | Quantity < 0) %>%
   # Convert datetime to date
