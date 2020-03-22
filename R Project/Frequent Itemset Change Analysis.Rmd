@@ -1,0 +1,167 @@
+---
+title: "R Notebook"
+output: html_notebook
+---
+
+```{r include=FALSE}
+library(tidyverse)
+library(lubridate)
+library("arules")
+library(stringr)
+library(lubridate)
+```
+
+
+```{r include=FALSE}
+df <- read_csv("data\\online_retail_II.csv") %>%
+  rename(InvoiceNo = Invoice, UnitPrice = Price, CustomerID = `Customer ID`) %>%
+  mutate(isRefund = grepl("C", InvoiceNo) | Quantity < 0) %>%
+  # Convert datetime to date
+  mutate(InvoiceDate = as.Date(InvoiceDate, format = "%m/%d/%Y %H:%M")) %>%
+  # Extract month
+  mutate(InvoiceYearMonth = paste0(year(InvoiceDate),month(InvoiceDate)))
+
+df_by_date <- df %>% filter(!isRefund) %>% group_by(InvoiceDate) %>% summarise(InvoiceAmount = sum(UnitPrice))
+```
+
+
+```{r}
+ggplot(df_by_date) + geom_point(aes(x=InvoiceDate,y=InvoiceAmount)) + 
+  scale_x_date() + ylim(c(0,30000))
+
+```
+
+# Date Comparison
+
+Compare December-Jan orders to Jun-July to see how holidays compare to Summer.
+
+```{r echo=TRUE}
+
+# t0 is holidays
+df_t0 <- as.data.frame(df %>% filter(InvoiceDate >="2010-12-01", InvoiceDate <= "2011-01-31") %>% select(InvoiceNo,Description))
+# t1 is Summer
+df_t1 <- as.data.frame(df %>% filter(InvoiceDate >="2011-06-01", InvoiceDate <= "2011-07-31") %>% select(InvoiceNo,Description))
+
+t0_transactions <- as(split(df_t0[,"Description"],df_t0[,"InvoiceNo"]), "transactions")
+t1_transactions <- as(split(df_t1[,"Description"],df_t1[,"InvoiceNo"]), "transactions")
+
+# TODO incorporate weights
+#t0_weights <- as.data.frame(read_csv("data\\bq_data_weekend_weights.csv")) 
+#t0_transactions@itemsetInfo$weights <- t0_weights
+
+```
+
+# Transaction notes
+https://www.rdocumentation.org/packages/arules/versions/1.6-4/topics/weclat
+https://subscription.packtpub.com/book/big_data_and_business_intelligence/9781788621878/1/ch01lvl1sec12/weighted-association-rule-mining
+
+- TODO look into negative association rules:
+  https://subscription.packtpub.com/book/big_data_and_business_intelligence/9781788621878/1/ch01lvl1sec14/negative-association-rules
+
+- TODO look at confidence in changes between time periods in extension/reduction
+Keep in mind for item matrices:
+union(x, y)
+intersect(x, y)
+setequal(x, y)
+setdiff(x, y)
+is.element(el, set)
+is.maximal(items)
+interestMeasure(t0_freq_items, c("lift"), t0_transactions)
+interestMeasure(t0_freq_items, c("support", "lift", "allConfidence", "crossSupportRatio"), t0_transactions)
+
+ freq.items.df <- data.frame(item_set = labels(freq.items)
+ , support = freq.items@quality)
+
+How to select a single itemset based on label:
+t0_freq_items[labels(t0_freq_items) == "{Hope Sabbath School}"]
+
+- Cross-support ratio: if there's a wide gap between min and max support of any item in the itemset, then the pattern is likely spurious
+- LIft for itemsets is the support of the itemset / product of support of each item. 1 is independent
+
+# Explore itemset support
+
+As we can see below, a minimum support of around .02 provides a good balance of filtering out common items.
+
+```{r message=FALSE, warning=FALSE, include=FALSE}
+
+supports <- c(.01,.02,.03,.04,.05,.06,.07,.08,.09,.1)
+itemset_df <- data.frame(support = rep(supports,2))
+itemset_df$time <- c(rep("t0",length(supports)),rep("t1",length(supports)))
+
+itemset_df$length <- c(
+  sapply(supports,function(x){length(eclat(t0_transactions, parameter = list(supp = x, minlen=1))) }), 
+                       sapply(supports,function(x){length(eclat(t1_transactions, parameter = list(supp = x, minlen=1))) })
+  )
+```
+
+```{r echo=TRUE, message=TRUE}
+ggplot(itemset_df) + geom_col(aes(x=factor(support),y=length,fill=time), position="dodge")
+
+```
+
+# Extension Set
+
+Example: {A,B} is found in Window 1 and {A,B,C} is found in Window 2 but not Window 1. sup W2 / sup W1 = inf
+
+```{r include=FALSE}
+# 5056 transactions
+t0_freq_items <- eclat(t0_transactions, parameter = list(supp = 0.02, minlen=1)) 
+# 3009 transactions
+t1_freq_items <- eclat(t1_transactions, parameter = list(supp = 0.02, minlen=2)) 
+
+t1_items_not_in_t0 <- items(t1_freq_items)[support(t1_freq_items, t0_transactions) == 0]
+
+df_extension <- (as.data.frame(is.subset(t0_freq_items, t1_items_not_in_t0, sparse=F)) %>% rownames_to_column() %>% rename(t0_items = rowname) %>% pivot_longer(-t0_items,names_to="t1_items", values_to="t0_in_t1")) %>% filter(t0_in_t1 == T) %>% select(-t0_in_t1)
+
+```
+
+```{r}
+
+kable(df_extension)
+
+```
+
+# Reduction Set
+
+```{r include=FALSE}
+t0_freq_items <- eclat (t0_transactions, parameter = list(supp = 0.02, maxlen = 15, minlen=2)) 
+t1_freq_items <- eclat (t1_transactions, parameter = list(supp = 0.02, maxlen = 15, minlen=1)) 
+t0_items_not_in_t1 <- items(t0_freq_items)[support(t0_freq_items, t1_transactions) == 0]
+
+df_reduction <- (as.data.frame(is.superset(t0_items_not_in_t1, t1_freq_items, sparse=F)) %>% rownames_to_column() %>% rename(t0_items = rowname) %>% pivot_longer(-t0_items,names_to="t1_items", values_to="t1_in_t0")) %>% filter(t1_in_t0 == T) %>% select(-t1_in_t0)
+
+```
+
+```{r}
+
+kable(df_reduction)
+
+```
+
+# Support Fluctuation
+
+```{r include=FALSE}
+t0_freq_items <- eclat (t0_transactions, parameter = list(supp = 0.02, maxlen = 15, minlen=1)) 
+t1_freq_items <- eclat (t1_transactions, parameter = list(supp = 0.02, maxlen = 15, minlen=1))
+
+t0_t1_intersect <- intersect(t0_freq_items,t1_freq_items)
+
+# Calculate difference in support for each intersecting itemset
+# Treating t1 as the 'sample' when determining N (window size)
+# epsilon = sqrt(ln(1/delta)/2*N); N=3009; delta=.05
+delta <-  .05
+N <- length(t1_transactions)
+epsilon <- sqrt(log(1/delta)/(2*N))
+support_diff <- abs(support(t0_t1_intersect, t0_transactions) - support(t0_t1_intersect, t1_transactions))
+
+# Found intersecting itemsets that have meaningful difference in support across windows
+support_fluctuation_set <- t0_t1_intersect[support_diff > epsilon]
+df_support_fluctuation <- data.frame("itemsets"=labels(support_fluctuation_set), "t0_support"=support(support_fluctuation_set, t0_transactions), "t1_support"=support(support_fluctuation_set, t1_transactions)) %>% mutate(diff = abs(t0_support - t1_support)) %>% arrange(desc(diff))
+
+
+```
+
+```{r}
+kable(df_support_fluctuation)
+```
+
