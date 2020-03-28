@@ -54,8 +54,17 @@ time_periods <- length(transactions)
 # Explore minsupport values
 
 ```{r message=FALSE, warning=FALSE}
-# Explore support - .04 seems like a good cutoff
-supports <- c(.02,.03,.04,.05,.06,.07,.08,.09,.1)
+# Explore supports across all time partitions
+supports <- c(.02,.03,.04,.05,.06,.07,.08,.09)
+global_support_df <- data.frame(support = supports)
+global_support_df$frequent_items <- as.vector(sapply(supports,function(x)length(eclat(transactions_union, parameter = list(supp = x, minlen=1), control=list(verbose=F)))))
+
+ggplot(global_support_df) + geom_col(aes(x=factor(support),y=frequent_items))
+
+```
+
+```{r message=FALSE, warning=FALSE}
+# Explore supports across each individual time partition
 num_supports <- length(supports)
 itemset_df <- expand.grid(supports, names(transactions)) %>% rename(support = 1, time_partition = 2)
 itemset_df$frequent_items <- apply(itemset_df, 1, FUN=function(x) length(eclat(transactions[[x[2]]], parameter = list(supp = as.numeric(x[[1]]), minlen=1), control = list(verbose=F))))
@@ -66,13 +75,12 @@ ggplot(itemset_df) + geom_col(aes(x=factor(support),y=frequent_items,fill=time_p
 
 # Determine rules of interest
 
-Rules must meet minsup and minconf across at least 1 time partition. We then collect measures for these rules across the entire transaction set.
+Rules must meet minsup and minconf across at least 1 time partition AND meet minsup and minconf across the merged transaction set. 
 
 ```{r warning=FALSE}
 
-# Explore rules
 minsup <- .02
-minconf <- .3
+minconf <- .35
 critical_z <- -1.65 # equates to 95% confidence
 
 # Collect rules from each individual time partition
@@ -93,11 +101,13 @@ kable(measures_union_df %>% rename(rule = label))
 
 ```
 
-# Find stable rules
+# Find semi-stable and stable rules
 
 Stable rules are discovered by first finding "Semi-stable" rules. These are rules that meet the minsup and minconf criteria in a statistically significant way. 
 
 Stable rules are those that meet the "semi stable" criteria and also show signiicant homogeneity in support and confidence across time periods via a chi squared test. 
+
+## Semi-stable
 
 ```{r message=FALSE, warning=FALSE}
 # evaluate support & confidence for these rules against all individual time periods
@@ -125,6 +135,12 @@ semi_stable_df <- measures_df %>% rename(rule_count = count) %>%
   # Count how many time periods the rule is still associated with
   group_by(label) %>% tally() %>% filter(n >= time_periods)
 
+kable(semi_stable_df %>% rename(rule=label))
+```
+
+## Stable
+
+```{r message=FALSE, warning=FALSE}
 # Evaluate stable rules:
 labels_split <- split(measures_df %>% select(label,count, inverse_count),f=measures_df$label)
 p_values_df <- rownames_to_column(as.data.frame(sapply(labels_split,function(x){chisq.test(x %>% select(-label))$p.value}))) %>% rename(label = rowname,pvalue = 2)
