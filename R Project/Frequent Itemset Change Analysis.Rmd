@@ -9,6 +9,7 @@ library(lubridate)
 library("arules")
 library(stringr)
 library(lubridate)
+library(readxl)
 ```
 
 
@@ -19,13 +20,13 @@ df <- read_excel("..\\data\\online_retail_II.xlsx") %>%
   # Convert datetime to date
   mutate(InvoiceDate = as.Date(InvoiceDate, format = "%m/%d/%Y %H:%M")) %>%
   # Extract month
-  mutate(InvoiceYearMonth = paste0(year(InvoiceDate),month(InvoiceDate)))
+  mutate(InvoiceYearMonth = paste0(year(InvoiceDate),month(InvoiceDate))) 
 
 df_by_date <- df %>% filter(!isRefund) %>% group_by(InvoiceDate) %>% summarise(InvoiceAmount = sum(UnitPrice))
 ```
 
 
-```{r}
+```{r warning=FALSE, error=FALSE, message=FALSE}
 ggplot(df_by_date) + geom_point(aes(x=InvoiceDate,y=InvoiceAmount)) + 
   scale_x_date() + ylim(c(0,30000))
 
@@ -38,9 +39,10 @@ Compare December-Jan orders to Jun-July to see how holidays compare to Summer.
 ```{r echo=TRUE}
 
 # t0 is holidays
-df_t0 <- as.data.frame(df %>% filter(InvoiceDate >="2010-12-01", InvoiceDate <= "2011-01-31") %>% select(InvoiceNo,Description))
+df_t0 <- as.data.frame(df %>% filter(InvoiceDate >=as.Date("2009-12-01"), InvoiceDate <= as.Date("2010-01-31")) %>% 
+                         select(InvoiceNo,Description))
 # t1 is Summer
-df_t1 <- as.data.frame(df %>% filter(InvoiceDate >="2011-06-01", InvoiceDate <= "2011-07-31") %>% select(InvoiceNo,Description))
+df_t1 <- as.data.frame(df %>% filter(InvoiceDate >=as.Date("2010-06-01"), InvoiceDate <= as.Date("2010-07-31")) %>% select(InvoiceNo,Description))
 
 t0_transactions <- as(split(df_t0[,"Description"],df_t0[,"InvoiceNo"]), "transactions")
 t1_transactions <- as(split(df_t1[,"Description"],df_t1[,"InvoiceNo"]), "transactions")
@@ -84,7 +86,7 @@ As we can see below, a minimum support of around .02 provides a good balance of 
 
 ```{r message=FALSE, warning=FALSE, include=FALSE}
 
-supports <- c(.01,.02,.03,.04,.05,.06,.07,.08,.09,.1)
+supports <- c(.02,.03,.04,.05,.06,.07,.08,.09,.1)
 itemset_df <- data.frame(support = rep(supports,2))
 itemset_df$time <- c(rep("t0",length(supports)),rep("t1",length(supports)))
 
@@ -104,22 +106,21 @@ ggplot(itemset_df) + geom_col(aes(x=factor(support),y=length,fill=time), positio
 Example: {A,B} is found in Window 1 and {A,B,C} is found in Window 2 but not Window 1. sup W2 / sup W1 = inf
 
 ```{r include=FALSE}
+minsup <- .03
+
 # 5056 transactions
-t0_freq_items <- eclat(t0_transactions, parameter = list(supp = 0.02, minlen=1)) 
+t0_freq_items <- eclat(t0_transactions, parameter = list(supp = minsup, minlen=1)) 
 # 3009 transactions
-t1_freq_items <- eclat(t1_transactions, parameter = list(supp = 0.02, minlen=2)) 
+t1_freq_items <- eclat(t1_transactions, parameter = list(supp = minsup, minlen=2)) 
 
 t1_items_not_in_t0 <- items(t1_freq_items)[support(t1_freq_items, t0_transactions) == 0]
 
 df_extension <- (as.data.frame(is.subset(t0_freq_items, t1_items_not_in_t0, sparse=F)) %>% rownames_to_column() %>% rename(t0_items = rowname) %>% pivot_longer(-t0_items,names_to="t1_items", values_to="t0_in_t1")) %>% filter(t0_in_t1 == T) %>% select(-t0_in_t1)
 
-```
-
-```{r}
-
 kable(df_extension)
 
 ```
+
 
 # Reduction Set
 
@@ -158,10 +159,7 @@ support_diff <- abs(support(t0_t1_intersect, t0_transactions) - support(t0_t1_in
 support_fluctuation_set <- t0_t1_intersect[support_diff > epsilon]
 df_support_fluctuation <- data.frame("itemsets"=labels(support_fluctuation_set), "t0_support"=support(support_fluctuation_set, t0_transactions), "t1_support"=support(support_fluctuation_set, t1_transactions)) %>% mutate(diff = abs(t0_support - t1_support)) %>% arrange(desc(diff))
 
-
-```
-
-```{r}
 kable(df_support_fluctuation)
 ```
+
 

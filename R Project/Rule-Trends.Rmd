@@ -1,0 +1,159 @@
+---
+title: "Rule Trends"
+author: "Adam Ribaudo"
+date: "3/28/2020"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+
+library(arules)
+library(tidyverse)
+library(data.table)
+library(readxl)
+library(knitr)
+library(arulesViz)
+library(PropCIs)
+library(ggthemes)
+library(scales)
+require(extrafont)
+library(RColorBrewer)
+library(usedist)
+source("functions.R")
+
+my_theme <- theme(
+        text=element_text(size=14,  family="Open Sans"),
+        axis.text.x = element_text(angle = 45, hjust=1),
+        panel.background  = element_blank(),
+        plot.background = element_rect(fill="white", colour=NA),
+        panel.grid = element_line(color = "grey90"),
+        plot.tag.position = "top",
+        plot.margin =  unit(c(5,5,5,5), "pt"),
+        plot.title = element_text(size = unit(c(14),"pt"),
+                                  margin = unit(c(10,0,0,0),"pt"),
+                                  hjust = 0.5),
+        plot.subtitle = element_text(size = unit(c(10),"pt"),
+                                  margin = unit(c(8,0,0,0),"pt"),
+                                  hjust = 0.5)
+        ) 
+```
+
+# Load data
+
+```{r warning=FALSE,message=FALSE}
+transaction_col = "transaction"
+partition_col = "partition"
+item_col = "item"
+minconf <- .5
+minsup <- .03
+critical_z <- -1.65 # equates to 95% confidence
+confidence_val <- .95
+partition_levels <- month.abb
+
+# Functions Require that the df have partition, transaction, and item as columns and that the parameters above are set
+df <- read_excel("..\\data\\online_retail_II.xlsx", sheet=1) %>% bind_rows(read_excel("..\\data\\online_retail_II.xlsx", sheet=2)) %>%
+  rename(InvoiceNo = Invoice, UnitPrice = Price, CustomerID = `Customer ID`) %>%
+  mutate(isRefund = grepl("C", InvoiceNo) | Quantity < 0) %>%
+  filter(isRefund == FALSE) %>%
+  # Convert datetime to date
+  mutate(InvoiceDate = as.Date(InvoiceDate, format = "%m/%d/%Y %H:%M")) %>%
+  # Extract month
+  mutate(InvoiceYearMonth = paste0(year(InvoiceDate),month(InvoiceDate))) %>%
+  # Consider 2010 data only
+  filter(grepl("2010",InvoiceYearMonth)) %>%
+  mutate(month = month.abb[month(InvoiceDate)])
+
+df_month <- df %>% rename(partition = month, transaction = InvoiceNo, item = StockCode)
+results_month <- get_change_mining_results(df_month,minsup=minsup,minconf=minconf,confidence_val=.95)
+partitioned_transactions <- results_month$partitioned_transactions
+
+```
+
+# Distribution of Itemset Sizes (2010 Transactions)
+
+```{r message=FALSE, warning=FALSE}
+# Explore supports across all time partitions
+supports <- c(.015, .02, .025, .03)
+global_support_df <- data.frame(support = supports)
+global_support_df$frequent_items <- as.vector(sapply(supports,function(x)length(eclat(get_transactions_from_df(df_month), parameter = list(supp = x, minlen=1), control=list(verbose=F)))))
+
+ggplot(global_support_df) + geom_col(aes(x=factor(support),y=frequent_items)) + labs(y="Frequent Itemsets",x="Support",title="Number of Frequent Itemsets by Min Support") + my_theme
+
+```
+
+# Partition Data by Month
+## Distance between Months
+
+The heatmap below shows the "distance" between each month as calculated by the Jaccard distance: (1-intersection/union) where intersection and union are comparing frequent itemsets between the 2 months.
+
+```{r echo=FALSE,warning=FALSE,message=FALSE}
+distance_df <- as.data.frame(combn(partition_levels,2)) %>% 
+  transpose() %>% 
+  rename(month1=1,month2=2) %>% 
+  mutate(month1=factor(month1,levels=partition_levels)) %>%
+  mutate(month2=factor(month2,levels=partition_levels)) %>%
+  rowwise() %>% mutate(distance = get_partition_dist(partitioned_transactions[[month1]],partitioned_transactions[[month2]],minsup=.03))
+
+ggplot(distance_df) + geom_tile(aes(x=month1,y=month2,fill=distance))
+
+```
+
+## Itemset size across Months
+
+Each cell is a histogram showing the size of the frequent itemsets (with minsup=`r minsup`) for each month partition. The red line and coloring denote the median for that month. 
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+
+itemset_distribution_df <- as.data.frame(rbindlist(lapply(partitioned_transactions, function(x)data.frame(size=size(x))),fill=T,idcol=T)) %>% rename(partition = .id) %>%
+   mutate(partition = factor(partition, levels=partition_levels)) %>%
+  group_by(partition) %>% mutate(`Median` = median(size))
+
+ggplot(itemset_distribution_df) + geom_histogram(aes(x=size,fill=`Median`),bins=10) + 
+  facet_wrap(~partition) + 
+  geom_vline(aes(xintercept = `Median`),col='red',size=.1) +
+  xlim(c(0,40)) + labs(x="Frequent Itemset Size",y="Number of Itemsets",title="Frequent Itemset Size Distribution by Month") + my_theme
+```
+
+## Rule Counts by Minsup
+
+This chart shows the number of frequent rules, semi stable rules, and stable rules at varying levels of minsup. Ideally, we can set a minsup that yields a small handful of stable rules worth evaluating further.
+
+This shows the value of finding stable rules: they help reduce the number of frequent rules we must consider
+
+```{r message=FALSE, warning=FALSE}
+# Plot # of rules by minsup
+minsups <- c(.022,.024,.026,.028,.03)
+rule_type_counts_month <- get_rule_type_counts(minsups, df_month, minconf, confidence_val)
+
+ggplot(rule_type_counts_month) + geom_line(aes(x=minsup,y=`Rule Count`,color=`Rule Type`)) + labs(title="Rule Count as Minsup Increases, by Rule Type", subtitle="Month Partition") + my_theme
+
+```
+
+## Stable Rules
+
+The table below shows rules that are stable across all 12 months at minsup = `r minsup`
+
+21977 = PACK OF 60 PINK PAISLEY CAKE CASES
+21212 = PACK OF 72 RETRO SPOT CAKE CASES
+
+```{r warning=FALSE,message=FALSE}
+kable(results_month$stable_df)
+```
+
+## Confidence Interval for stable rules
+
+For the two stable rules found, we can plot their support confidence intervals by month to show that they are, in fact, stable.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+ci_graph_df <- get_ci_graph_df(results_month$partitioned_rules_measures_df, results_month$stable_df, confidence_val, partition_levels)
+
+ggplot(ci_graph_df, aes(x=partition, y=support)) + 
+    geom_errorbar(aes(ymin=ci_low, ymax=ci_high), width=.1) +
+    #geom_line() +
+    geom_point() + theme(legend.position="bottom") + facet_wrap(~rule,strip.position="top",nrow=2) + my_theme
+```
+
+
+
+
