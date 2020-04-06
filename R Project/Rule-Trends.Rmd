@@ -83,6 +83,7 @@ ggplot(global_support_df) + geom_col(aes(x=factor(support),y=frequent_items)) + 
 ```
 
 # Partition Data by Month
+
 ## Distance between Months
 
 The heatmap below shows the "distance" between each month as calculated by the Jaccard distance: (1-intersection/union) where intersection and union are comparing frequent itemsets between the 2 months.
@@ -132,18 +133,18 @@ ggplot(rule_type_counts_month) + geom_line(aes(x=minsup,y=`Rule Count`,color=`Ru
 
 ## Stable Rules
 
-The table below shows rules that are stable across all 12 months at minsup = `r minsup`
+The table below shows rules that are stable across all 12 months at minsup = `r minsup`  
 
-21977 = PACK OF 60 PINK PAISLEY CAKE CASES
+21977 = PACK OF 60 PINK PAISLEY CAKE CASES  
 21212 = PACK OF 72 RETRO SPOT CAKE CASES
 
-```{r warning=FALSE,message=FALSE}
+```{r echo=FALSE, message=FALSE, warning=FALSE}
 kable(results_month$stable_df)
 ```
 
 ## Confidence Interval for stable rules
 
-For the two stable rules found, we can plot their support confidence intervals by month to show that they are, in fact, stable.
+For the stable rules found, we can plot their support confidence intervals by month to show that they are, in fact, stable.
 
 ```{r echo=FALSE, message=FALSE, warning=FALSE}
 ci_graph_df <- get_ci_graph_df(results_month$partitioned_rules_measures_df, results_month$stable_df, confidence_val, partition_levels)
